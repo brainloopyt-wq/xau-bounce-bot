@@ -32,8 +32,9 @@ class SimpleHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"OK")
         
     def log_message(self, format, *args):
-        # Disabilita i log HTTP continui in console per pulire l'output
+        # Disabilita i log HTTP continui in console per mantenere l'output pulito
         return
+
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), SimpleHandler)
