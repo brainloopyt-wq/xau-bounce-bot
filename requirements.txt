@@ -1,0 +1,7 @@
+requests
+pandas
+numpy
+ta
+supabase
+google-genai
+python-dotenv
