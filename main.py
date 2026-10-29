@@ -2,7 +2,7 @@ import os
 import time
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -13,14 +13,11 @@ from db import save_bounce_signal
 from telegram_bot import send_bounce_telegram_alert
 from config import DEFAULT_SL_DOLLARS, DEFAULT_TP_DOLLARS, SYMBOL
 
-# Importiamo o gestiamo la connessione a Supabase per il salvataggio dello stato live
+# Connessione a Supabase per il salvataggio dello stato live
 from supabase import create_client
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://wgliaidollibufxesvqi.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndnbGlhaWRvbGxpYnVmeGVzdnFpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI4NDU5OTMsImV4cCI6MjEwODQyMTk5M30.Rld18wsMSHlWu35mDXqfWxAYj505aRZhhWMbJf4EYMQ")
 db_client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-def save_bot_status(status_data):
-    from datetime import datetime, timezone
 
 def save_bot_status(status_data):
     """Salva o aggiorna lo stato corrente del bot su Supabase per la dashboard live."""
@@ -88,7 +85,6 @@ def fetch_market_data() -> pd.DataFrame:
             
         parsed_data = []
         for c in candles:
-            # Rimuoviamo il filtro rigido 'complete' per assicurarci di prendere comunque l'ultima candela attiva
             mid = c.get('mid', {})
             if mid:
                 parsed_data.append({
@@ -105,9 +101,6 @@ def fetch_market_data() -> pd.DataFrame:
     except Exception as e:
         print(f"[ERRORE FETCH OANDA]: {e}")
         return pd.DataFrame()
-
-
-
 
 def run_bounce_bot():
     print(f"🚀 Bounce Bot (XAU/USD Mean-Reversion) Avviato con successo...")
@@ -146,13 +139,11 @@ def run_bounce_bot():
             if setup and setup.get("signal"):
                 print(f"[SETUP TROVATO] {setup['signal']} a ${setup['price']} (Score Locale: {score})")
                 
-                # RISPARMIO API - LIVELLO 1: Se il punteggio locale è basso (< 0.5), scarta subito
                 if score < 0.5:
                     print("[GATE] Setup scartato localmente per score insufficiente.")
                     time.sleep(30)
                     continue
                 
-                # RISPARMIO API - LIVELLO 2: Se il setup è perfetto (score >= 0.9), bypassa l'IA
                 if score >= 0.9:
                     ai_result = {
                         "approved": True, 
@@ -174,7 +165,6 @@ def run_bounce_bot():
                         setup["sl"] = entry_price + DEFAULT_SL_DOLLARS
                         setup["tp"] = entry_price - DEFAULT_TP_DOLLARS
 
-                    # 3. Salvataggio Database Supabase (Tabella dedicata: bounce_signals)
                     db_payload = {
                         "symbol": SYMBOL,
                         "signal_type": setup["signal"],
@@ -187,11 +177,8 @@ def run_bounce_bot():
                         "status": "APPROVED"
                     }
                     save_bounce_signal(db_payload)
-                    
-                    # 4. Invio Notifica Telegram sul bot ufficiale
                     send_bounce_telegram_alert(setup, ai_result)
             
-            # Frequenza di controllo (ogni 30 secondi)
             time.sleep(30)
             
         except Exception as e:
