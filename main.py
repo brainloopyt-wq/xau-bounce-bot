@@ -43,35 +43,45 @@ def run_web_server():
 
 def fetch_market_data() -> pd.DataFrame:
     """
-    Scarica i dati spot di XAU/USD da Yahoo Finance (intervallo 5m), 
-    esattamente come nel bot principale.
+    Scarica i dati spot di XAU/USD da OANDA API pubblica (intervallo 5m),
+    garantendo stabilità e coerenza con i grafici di TradingView.
     """
     try:
-        url = "https://query1.finance.yahoo.com/v8/finance/chart/XAU=X?interval=5m&range=1d"
+        # Endpoint pubblico OANDA v3 per le candele (Instrument: XAU_USD, Granularity: M5)
+        url = "https://api-fxtrade.oanda.com/v3/instruments/XAU_USD/candles?count=100&granularity=M5"
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=5)
-        data = response.json()
         
-        if not data.get('chart') or not data['chart'].get('result'):
-            print("[MERCATO CHIUSO / DATI ASSENTI] Impossibile recuperare il feed spot.")
+        if response.status_code != 200:
+            print(f"[MERCATO] Errore HTTP OANDA: {response.status_code}")
             return pd.DataFrame()
             
-        result = data['chart']['result'][0]
-        quotes = result['indicators']['quote'][0]
+        data = response.json()
+        candles = data.get('candles', [])
         
-        df = pd.DataFrame({
-            'open': quotes.get('open', []),
-            'high': quotes.get('high', []),
-            'low': quotes.get('low', []),
-            'close': quotes.get('close', []),
-            'volume': quotes.get('volume', [])
-        }).dropna()
-        
+        if not candles:
+            print("[DATI] Nessuna candela ricevuta da OANDA.")
+            return pd.DataFrame()
+            
+        parsed_data = []
+        for c in candles:
+            if c.get('complete', True): # Prende le candele completate
+                mid = c.get('mid', {})
+                parsed_data.append({
+                    'open': float(mid.get('o', 0)),
+                    'high': float(mid.get('h', 0)),
+                    'low': float(mid.get('l', 0)),
+                    'close': float(mid.get('c', 0)),
+                    'volume': int(c.get('volume', 0))
+                })
+                
+        df = pd.DataFrame(parsed_data).dropna()
         return df
         
     except Exception as e:
-        print(f"[ERRORE FETCH ORO SPOT]: {e}")
+        print(f"[ERRORE FETCH OANDA]: {e}")
         return pd.DataFrame()
+
 
 def run_bounce_bot():
     print(f"🚀 Bounce Bot (XAU/USD Mean-Reversion) Avviato con successo...")
