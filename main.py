@@ -2,6 +2,7 @@ import os
 import time
 import requests
 import pandas as pd
+from datetime import datetime
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -11,6 +12,30 @@ from ai_validator import validate_signal_with_gemini
 from db import save_bounce_signal
 from telegram_bot import send_bounce_telegram_alert
 from config import DEFAULT_SL_DOLLARS, DEFAULT_TP_DOLLARS, SYMBOL
+
+# Importiamo o gestiamo la connessione a Supabase per il salvataggio dello stato live
+from supabase import create_client
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://wgliaidollibufxesvqi.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndnbGlhaWRvbGxpYnVmeGVzdnFpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI4NDU5OTMsImV4cCI6MjEwODQyMTk5M30.Rld18wsMSHlWu35mDXqfWxAYj505aRZhhWMbJf4EYMQ")
+db_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def save_bot_status(status_data):
+    """Salva o aggiorna lo stato corrente del bot su Supabase per la dashboard live."""
+    try:
+        # Usiamo un upsert basato su un id fisso (es. id = 1) per mantenere sempre l'ultimo stato aggiornato
+        payload = {
+            "id": 1,
+            "symbol": SYMBOL,
+            "last_price": status_data.get("price", 0),
+            "rsi": status_data.get("rsi", 0),
+            "local_score": status_data.get("local_score", 0),
+            "status_message": status_data.get("message", "In esecuzione..."),
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        db_client.table("bot_status").upsert(payload).execute()
+    except Exception as e:
+        # Silenziamo eventuali errori di rete minori per non interrompere il loop principale
+        pass
 
 # --- MINI SERVER WEB PER MANTENERE IL BOT GRATUITO SU RENDER ---
 class SimpleHandler(BaseHTTPRequestHandler):
@@ -32,7 +57,6 @@ class SimpleHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"OK")
         
     def log_message(self, format, *args):
-        # Disabilita i log HTTP continui in console per mantenere l'output pulito
         return
 
 def run_web_server():
@@ -47,7 +71,6 @@ def fetch_market_data() -> pd.DataFrame:
     garantendo stabilità e coerenza con i grafici di TradingView.
     """
     try:
-        # Endpoint pubblico OANDA v3 per le candele (Instrument: XAU_USD, Granularity: M5)
         url = "https://api-fxtrade.oanda.com/v3/instruments/XAU_USD/candles?count=100&granularity=M5"
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=5)
@@ -65,7 +88,7 @@ def fetch_market_data() -> pd.DataFrame:
             
         parsed_data = []
         for c in candles:
-            if c.get('complete', True): # Prende le candele completate
+            if c.get('complete', True):
                 mid = c.get('mid', {})
                 parsed_data.append({
                     'open': float(mid.get('o', 0)),
@@ -88,22 +111,39 @@ def run_bounce_bot():
     
     while True:
         try:
-            # 1. Recupero Dati di Mercato ( Yahoo Finance )
+            # 1. Recupero Dati di Mercato ( OANDA )
             df = fetch_market_data()
             
             if df.empty or len(df) < 20:
                 print("[DATI] Dati insufficienti o mercato chiuso, attesa...")
+                save_bot_status({
+                    "price": 0,
+                    "rsi": 0,
+                    "local_score": 0,
+                    "message": "In attesa di dati di mercato validi..."
+                })
                 time.sleep(30)
                 continue
 
             # 2. Analisi Tecnica e calcolo Local Score
             setup = analyze_scalp_setup(df)
+            current_price = float(df['close'].iloc[-1])
+            current_rsi = float(setup.get("rsi", 0)) if setup else 0
+            score = setup.get("local_score", 0) if setup else 0
             
-            if setup["signal"]:
-                score = setup["local_score"]
+            # Salvataggio dello stato corrente del ciclo su Supabase
+            status_msg = f"Scan OK | RSI: {current_rsi:.1f} | Score: {score:.2f}"
+            save_bot_status({
+                "price": current_price,
+                "rsi": current_rsi,
+                "local_score": score,
+                "message": status_msg
+            })
+
+            if setup and setup.get("signal"):
                 print(f"[SETUP TROVATO] {setup['signal']} a ${setup['price']} (Score Locale: {score})")
                 
-                # RISPARMIO API - LIVELLO 1: Se il punteggio locale è basso (< 0.5), scarta subito (0 crediti spesi)
+                # RISPARMIO API - LIVELLO 1: Se il punteggio locale è basso (< 0.5), scarta subito
                 if score < 0.5:
                     print("[GATE] Setup scartato localmente per score insufficiente.")
                     time.sleep(30)
@@ -117,14 +157,12 @@ def run_bounce_bot():
                         "reason": "Approvazione diretta: Setup ad altissima confluenza (S/R + RSI + Bollinger + Volumi)."
                     }
                 else:
-                    # Chiamata API effettuata SOLO per la "zona grigia" (es. score tra 0.5 e 0.89)
                     print(f"[AI GATE] Setup in zona grigia. Chiamata a Gemini in corso...")
                     ai_result = validate_signal_with_gemini(setup)
                 
                 if ai_result.get("approved"):
                     print(f"[SETUP APPROVATO] Invio notifiche e salvataggio...")
                     
-                    # Calcolo SL e TP dinamici per scalping su XAU/USD
                     entry_price = setup["price"]
                     if setup["signal"] == "BUY":
                         setup["sl"] = entry_price - DEFAULT_SL_DOLLARS
@@ -158,9 +196,6 @@ def run_bounce_bot():
             time.sleep(10)
 
 if __name__ == "__main__":
-    # Avvia il mini server web in background per il piano Free di Render
     server_thread = Thread(target=run_web_server, daemon=True)
     server_thread.start()
-    
-    # Avvia il motore di trading Bounce Bot
     run_bounce_bot()
