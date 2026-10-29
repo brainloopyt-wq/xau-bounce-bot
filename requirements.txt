@@ -4,6 +4,3 @@ numpy
 ta
 supabase
 google-genai
-python-dotenv
-websocket-client
-yfinance

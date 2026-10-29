@@ -1,191 +1,93 @@
-import os
+import logging
 import time
-import json
-import websocket
-import pandas as pd
+import os
 from datetime import datetime, timezone
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
-
-# Import dai moduli del Bounce Bot
+import requests
+import pandas as pd
+from config import (TWELVEDATA_API_KEY, SYMBOL, SCAN_INTERVAL,
+                    DEFAULT_SL_DOLLARS, DEFAULT_TP_DOLLARS)
 from indicators import analyze_scalp_setup
 from ai_validator import validate_signal_with_gemini
-from db import save_bounce_signal
+from db import save_bot_status, save_bounce_signal
 from telegram_bot import send_bounce_telegram_alert
-from config import DEFAULT_SL_DOLLARS, DEFAULT_TP_DOLLARS, SYMBOL
 
-# Credenziali XTB & Supabase dalle Environment Variables
-XTB_USER_ID = os.environ.get("XTB_USER_ID", "21803137")
-XTB_PASSWORD = os.environ.get("XTB_PASSWORD", "Joussefcarlo2706!")
-XTB_WS_URL = "wss://ws.xtb.com/demo"
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+log = logging.getLogger('bounce')
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://wgliaidollibufxesvqi.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndnbGlhaWRvbGxpYnVmeGVzdnFpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI4NDU5OTMsImV4cCI6MjEwODQyMTk5M30.Rld18wsMSHlWu35mDXqfWxAYj505aRZhhWMbJf4EYMQ")
-
-from supabase import create_client
-db_client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-def save_bot_status(status_data):
-    """Salva o inserisce lo stato corrente su Supabase con gestione degli errori."""
-    try:
-        payload = {
-            "id": 1,
-            "symbol": SYMBOL,
-            "last_price": float(status_data.get("price", 0)),
-            "rsi": float(status_data.get("rsi", 0)),
-            "local_score": float(status_data.get("local_score", 0)),
-            "status_message": str(status_data.get("message", "In esecuzione...")),
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }
-        # Esegue l'upsert forzato sulla riga con id=1
-        response = db_client.table("bot_status").upsert(payload).execute()
-        print(f"[SUPABASE SUCCESS] Stato aggiornato: {payload['last_price']} | RSI: {payload['rsi']}")
-    except Exception as e:
-        print(f"[SUPABASE ERROR CRITICAL] Errore upsert bot_status: {e}")
-
-# --- MINI SERVER WEB PER RENDER ---
-class SimpleHandler(BaseHTTPRequestHandler):
+class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
-        self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Flow-IA XAUUSD XTB Bot is active 24/7!")
+        self.wfile.write(b'Bounce bot process online (not market-feed health)')
+    def log_message(self, *_): pass
 
-    def do_HEAD(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
+def serve():
+    HTTPServer(('0.0.0.0', int(os.getenv('PORT', '10000'))), Handler).serve_forever()
 
-    def do_POST(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"OK")
-        
-    def log_message(self, format, *args):
-        return
+def fetch_closed_candles():
+    if not TWELVEDATA_API_KEY:
+        raise RuntimeError('TWELVEDATA_API_KEY mancante')
+    r = requests.get('https://api.twelvedata.com/time_series', params={
+        'symbol': SYMBOL, 'interval': '5min', 'outputsize': 100,
+        'apikey': TWELVEDATA_API_KEY, 'timezone': 'UTC', 'format': 'JSON'}, timeout=20)
+    r.raise_for_status()
+    data = r.json()
+    if data.get('status') == 'error' or not data.get('values'):
+        raise RuntimeError(f"Feed Twelve Data: {str(data.get('message', data))[:250]}")
+    df = pd.DataFrame(data['values'])
+    df['datetime'] = pd.to_datetime(df['datetime'], utc=True)
+    for col in ('open', 'high', 'low', 'close'):
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    # Forex/metal feeds may not provide real traded volume.
+    if 'volume' in df.columns:
+        df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+    df = df.dropna(subset=['datetime', 'open', 'high', 'low', 'close'])
+    now = pd.Timestamp.now(tz='UTC')
+    df = df[df['datetime'] + pd.Timedelta(minutes=5) <= now]
+    df = df.sort_values('datetime').drop_duplicates('datetime').reset_index(drop=True)
+    if len(df) < 30:
+        raise RuntimeError(f'Solo {len(df)} candele chiuse disponibili')
+    return df
 
-def run_web_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
-    print(f"[WEB SERVER] In ascolto sulla porta {port}...")
-    server.serve_forever()
-
-def fetch_xtb_market_data() -> pd.DataFrame:
-    """Scarica candele M5 per XAU/USD tramite Binance PAXG (Oro fisico 1:1) in modo stabile su Render."""
-    try:
-        url = "https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=5m&limit=50"
-        response = requests.get(url, timeout=10)
-        
-        if response.status_code != 200:
-            print(f"[MARKET] Errore HTTP Binance: {response.status_code}")
-            return pd.DataFrame()
-            
-        data = response.json()
-        if not isinstance(data, list) or len(data) == 0:
-            print("[MARKET] Nessun dato ricevuto da Binance.")
-            return pd.DataFrame()
-            
-        parsed_data = []
-        for c in data:
-            parsed_data.append({
-                'open': float(c[1]),
-                'high': float(c[2]),
-                'low': float(c[3]),
-                'close': float(c[4]),
-                'volume': float(c[5])
-            })
-            
-        df = pd.DataFrame(parsed_data).dropna()
-        return df
-        
-    except Exception as e:
-        print(f"[MARKET EXCEPTION]: {e}")
-        return pd.DataFrame()
-
-def run_bounce_bot():
-    print(f"🚀 Bounce Bot XTB (XAU/USD) Avviato con successo...")
-    
+def run():
+    last_alert_candle = None
+    # Un solo polling ogni 5 minuti: evita 2.880 richieste al giorno.
+    poll_seconds = max(300, SCAN_INTERVAL)
+    log.info("Polling Twelve Data ogni %s secondi", poll_seconds)
     while True:
         try:
-            # 1. Recupero Dati di Mercato direttamente da XTB
-            df = fetch_xtb_market_data()
-            
-            if df.empty or len(df) < 20:
-                print("[DATI] Dati XTB insufficienti o mercato chiuso, attesa...")
-                save_bot_status({
-                    "price": 0,
-                    "rsi": 0,
-                    "local_score": 0,
-                    "message": "In attesa di dati di mercato validi da XTB..."
-                })
-                time.sleep(30)
-                continue
-
-            # 2. Analisi Tecnica e calcolo Local Score
+            df = fetch_closed_candles()
+            candle = df['datetime'].iloc[-1].isoformat()
             setup = analyze_scalp_setup(df)
-            current_price = float(df['close'].iloc[-1])
-            current_rsi = float(setup.get("rsi", 0)) if setup else 0
-            score = setup.get("local_score", 0) if setup else 0
-            
-            status_msg = f"Scan XTB OK | RSI: {current_rsi:.1f} | Score: {score:.2f}"
-            save_bot_status({
-                "price": current_price,
-                "rsi": current_rsi,
-                "local_score": score,
-                "message": status_msg
-            })
+            log.info('Candle=%s price=%.2f RSI=%.2f score=%.2f signal=%s',
+                     candle, setup['price'], setup['rsi'], setup['local_score'], setup['signal'])
+            save_bot_status(price=setup['price'], rsi=setup['rsi'],
+                            local_score=setup['local_score'],
+                            message=f"Feed Twelve Data OK | candela M5 chiusa {candle}")
+            if setup['signal'] and setup['local_score'] >= 0.5 and candle != last_alert_candle:
+                score = setup['local_score']
+                ai = ({'approved': True, 'confidence_score': score,
+                       'reason': 'Regola locale score >= 0.9; Gemini non consultato'}
+                      if score >= 0.9 else validate_signal_with_gemini(setup))
+                if ai.get('approved'):
+                    setup['sl'] = setup['price'] + (-DEFAULT_SL_DOLLARS if setup['signal'] == 'BUY' else DEFAULT_SL_DOLLARS)
+                    setup['tp'] = setup['price'] + (DEFAULT_TP_DOLLARS if setup['signal'] == 'BUY' else -DEFAULT_TP_DOLLARS)
+                    payload = dict(symbol=SYMBOL, signal_type=setup['signal'], entry_price=setup['price'],
+                                   sl_price=setup['sl'], tp_price=setup['tp'], rsi=setup['rsi'],
+                                   ai_score=ai['confidence_score'], ai_reason=ai['reason'], status='APPROVED')
+                    save_bounce_signal(payload)
+                    last_alert_candle = candle  # avoid repeated alert on same closed candle within this process
+                    send_bounce_telegram_alert(setup, ai)
+        except Exception as exc:
+            log.exception('Scan fallito: %s', exc)
+            try:
+                save_bot_status(message=f'Dati non aggiornati: {type(exc).__name__}: {str(exc)[:100]}')
+            except Exception:
+                log.exception('Impossibile salvare lo stato di errore')
+        time.sleep(poll_seconds)
 
-            if setup and setup.get("signal"):
-                print(f"[SETUP TROVATO] {setup['signal']} a ${setup['price']} (Score: {score})")
-                
-                if score < 0.5:
-                    print("[GATE] Setup scartato localmente per score insufficiente.")
-                    time.sleep(30)
-                    continue
-                
-                if score >= 0.9:
-                    ai_result = {
-                        "approved": True, 
-                        "confidence_score": score, 
-                        "reason": "Approvazione diretta: Confluenza ad alto punteggio."
-                    }
-                else:
-                    print(f"[AI GATE] Setup in zona grigia. Chiamata a Gemini in corso...")
-                    ai_result = validate_signal_with_gemini(setup)
-                
-                if ai_result.get("approved"):
-                    print(f"[SETUP APPROVATO] Invio notifiche e salvataggio...")
-                    
-                    entry_price = setup["price"]
-                    if setup["signal"] == "BUY":
-                        setup["sl"] = entry_price - DEFAULT_SL_DOLLARS
-                        setup["tp"] = entry_price + DEFAULT_TP_DOLLARS
-                    else:
-                        setup["sl"] = entry_price + DEFAULT_SL_DOLLARS
-                        setup["tp"] = entry_price - DEFAULT_TP_DOLLARS
-
-                    db_payload = {
-                        "symbol": SYMBOL,
-                        "signal_type": setup["signal"],
-                        "entry_price": setup["price"],
-                        "sl_price": setup["sl"],
-                        "tp_price": setup["tp"],
-                        "rsi": setup["rsi"],
-                        "ai_score": ai_result.get("confidence_score"),
-                        "ai_reason": ai_result.get("reason"),
-                        "status": "APPROVED"
-                    }
-                    save_bounce_signal(db_payload)
-                    send_bounce_telegram_alert(setup, ai_result)
-            
-            time.sleep(30)
-            
-        except Exception as e:
-            print(f"[LOOP ERROR] Errore imprevisto nel main loop: {e}")
-            time.sleep(10)
-
-if __name__ == "__main__":
-    server_thread = Thread(target=run_web_server, daemon=True)
-    server_thread.start()
-    run_bounce_bot()
+if __name__ == '__main__':
+    Thread(target=serve, daemon=True).start()
+    run()
