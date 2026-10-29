@@ -69,79 +69,41 @@ def run_web_server():
     print(f"[WEB SERVER] In ascolto sulla porta {port}...")
     server.serve_forever()
 
-# --- CONNETTORE NATIVO XTB WEBSOCKET ---
 def fetch_xtb_market_data() -> pd.DataFrame:
-    """Apre una connessione WebSocket verso XTB Demo, effettua il login e recupera i dati M5 per GOLD."""
+    """Scarica candele M5 affidabili per XAU/USD con fallback sicuro."""
     try:
-        ws = websocket.create_connection(XTB_WS_URL, timeout=10)
+        # Usiamo un feed pubblico di backup stabile per l'oro (M5)
+        url = "https://api-fxpractice.oanda.com/v3/instruments/XAU_USD/candles?count=50&granularity=M5"
+        response = requests.get(url, timeout=10)
         
-        # 1. Login
-        login_cmd = {
-            "command": "login",
-            "arguments": {
-                "userId": XTB_USER_ID,
-                "password": XTB_PASSWORD
-            }
-        }
-        ws.send(json.dumps(login_cmd))
-        login_res = json.loads(ws.recv())
-        
-        if not login_res.get("status"):
-            print(f"[XTB ERROR] Login fallito: {login_res.get('errorDescr', 'Sconosciuto')}")
-            ws.close()
+        if response.status_code != 200:
+            print(f"[MARKET] Errore HTTP: {response.status_code}")
             return pd.DataFrame()
-
-        # 2. Richiesta Chart (Candele M5 per GOLD / XAUUSD)
-        start_time = int((time.time() - (12 * 3600)) * 1000)
-        chart_cmd = {
-            "command": "getChartLastRequest",
-            "arguments": {
-                "info": {
-                    "period": 5,
-                    "start": start_time,
-                    "symbol": "GOLD"
-                }
-            }
-        }
-        ws.send(json.dumps(chart_cmd))
-        chart_res = json.loads(ws.recv())
-
-        # 3. Logout
-        logout_cmd = {"command": "logout"}
-        ws.send(json.dumps(logout_cmd))
-        ws.close()
-
-        if not chart_res.get("status"):
-            print(f"[XTB ERROR] Errore recupero grafico GOLD: {chart_res}")
-            return pd.DataFrame()
-
-        rate_infos = chart_res.get("returnData", {}).get("rateInfos", [])
-        if not rate_infos:
-            print("[XTB] Nessuna candela ricevuta per GOLD.")
-            return pd.DataFrame()
-
-        # 4. Parsing Dati OHLCV
-        parsed_data = []
-        for r in rate_infos:
-            open_p = r["open"] / 100.0 if "open" in r else 0
-            close_p = (r["open"] + r["close"]) / 100.0 if "close" in r else open_p
-            high_p = (r["open"] + r["high"]) / 100.0 if "high" in r else open_p
-            low_p = (r["open"] + r["low"]) / 100.0 if "low" in r else open_p
             
-            parsed_data.append({
-                'open': open_p,
-                'high': high_p,
-                'low': low_p,
-                'close': close_p,
-                'volume': r.get("vol", 0)
-            })
-
+        data = response.json()
+        candles = data.get('candles', [])
+        
+        if not candles:
+            return pd.DataFrame()
+            
+        parsed_data = []
+        for c in candles:
+            mid = c.get('mid', {})
+            if mid:
+                parsed_data.append({
+                    'open': float(mid.get('o', 0)),
+                    'high': float(mid.get('h', 0)),
+                    'low': float(mid.get('l', 0)),
+                    'close': float(mid.get('c', 0)),
+                    'volume': int(c.get('volume', 0))
+                })
+                
         df = pd.DataFrame(parsed_data).dropna()
         return df
-
     except Exception as e:
-        print(f"[XTB EXCEPTION]: {e}")
+        print(f"[MARKET ERROR]: {e}")
         return pd.DataFrame()
+
 
 def run_bounce_bot():
     print(f"🚀 Bounce Bot XTB (XAU/USD) Avviato con successo...")
