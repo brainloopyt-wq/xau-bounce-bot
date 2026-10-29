@@ -65,10 +65,10 @@ def run_web_server():
 
 def fetch_market_data() -> pd.DataFrame:
     """
-    Scarica i dati spot di XAU/USD da OANDA API pubblica (intervallo 5m).
+    Scarica i dati spot di XAU/USD da OANDA API pubblica (Practice endpoint).
     """
     try:
-        url = "https://api-fxtrade.oanda.com/v3/instruments/XAU_USD/candles?count=100&granularity=M5"
+        url = "https://api-fxpractice.oanda.com/v3/instruments/XAU_USD/candles?count=100&granularity=M5"
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=5)
         
@@ -80,7 +80,7 @@ def fetch_market_data() -> pd.DataFrame:
         candles = data.get('candles', [])
         
         if not candles:
-            print("[DATI] Nessuna candela ricevuta da OANDA. JSON ricevuto:", data)
+            print("[DATI] Nessuna candela ricevuta da OANDA.")
             return pd.DataFrame()
             
         parsed_data = []
@@ -107,7 +107,7 @@ def run_bounce_bot():
     
     while True:
         try:
-            # 1. Recupero Dati di Mercato ( OANDA )
+            # 1. Recupero Dati di Mercato ( OANDA Practice )
             df = fetch_market_data()
             
             if df.empty or len(df) < 20:
@@ -163,7 +163,7 @@ def run_bounce_bot():
                         setup["tp"] = entry_price + DEFAULT_TP_DOLLARS
                     else:
                         setup["sl"] = entry_price + DEFAULT_SL_DOLLARS
-                        setup["tp"] = entry_price - DEFAULT_TP_DOLLARS
+                        setup["tp"] = entry_price - DEFAULT_SL_DOLLARS
 
                     db_payload = {
                         "symbol": SYMBOL,
