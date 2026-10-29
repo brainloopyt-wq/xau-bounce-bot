@@ -1,21 +1,25 @@
-# Bounce Bot - alert soltanto (nessun ordine automatico)
+# Bounce Bot V2 — Gemini selettivo, segnali Telegram e Supabase
 
-Questa versione usa **Twelve Data XAU/USD M5**, NON l'API XTB (dismessa) e NON garantisce prezzi identici a XTB. Verificare che il proprio piano Twelve Data supporti XAU/USD e la frequenza richiesta; in caso contrario il bot segnala l'errore e non inventa prezzi.
+## Installazione
+Sostituire i file Python e requirements.txt nel repository GitHub. Render: build `pip install -r requirements.txt`, start `python main.py`. Le credenziali restano nelle variabili Environment di Render: `TWELVEDATA_API_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`, `GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
 
-## Render
-- Tipo: Web Service, start command `python main.py`, Python 3.11+.
-- Environment: `SUPABASE_URL`, `SUPABASE_KEY`, `TWELVEDATA_API_KEY`, `GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
-- `SCAN_INTERVAL=300` opzionale; il programma impone comunque un intervallo minimo di 300 secondi. La disponibilità dei crediti dipende dal costo effettivo dell’endpoint e dal piano.
-- Ruotare tutte le chiavi e password precedentemente esposte; non inserirle nei file.
-- Supabase: creare la riga `bot_status` con `id=1` e verificare che RLS autorizzi SELECT/UPDATE per la chiave utilizzata. La tabella deve contenere `id`, `symbol`, `last_price`, `rsi`, `local_score`, `status_message`, `updated_at`. La tabella `bounce_signals` deve avere le colonne indicate in `main.py` e policy INSERT.
-- Il feed può non fornire volume reale: senza volume il bonus volume di 0.3 non scatta; lo score massimo diventa 0.7, e la validazione Gemini è necessaria per i segnali che superano la soglia 0.5. La strategia originale è preservata e perciò lo score 0 è normale in assenza di setup.
-- I segnali sono indicativi e non aprono operazioni. La deduplicazione degli alert è solo in memoria: un riavvio può ripetere un alert per la stessa candela. Per uso continuativo implementare una chiave univoca persistente per candela/segnale.
-- Il server HTTP risponde 200 anche quando il feed è in errore: controllare i log e `bot_status.status_message`.
+## Regole AI
+- **A** (score tecnico >= 0.85): Telegram **AI NON CONSULTATA**, zero chiamate Gemini.
+- **B** (0.65 <= score < 0.85): una richiesta Gemini; se approva, Telegram **VALIDATO DA GEMINI**; se respinge, niente notifica.
+- **B con Gemini indisponibile / quota interna esaurita**: Telegram **AI NON DISPONIBILE — segnale tecnico NON validato**. NON significa approvazione AI.
+- **C** (score < 0.65): nessuna notifica e nessuna chiamata Gemini.
 
-## Primo avvio
-1. Impostare le variabili Environment su Render, senza pubblicare le chiavi.
-2. Caricare i file nella radice del repository GitHub; comando di avvio `python main.py`.
-3. Verificare che `bot_status` contenga la riga `id=1` e che RLS permetta di aggiornarla.
-4. Controllare Logs: `Candle=...`, `price=...`, `RSI=...` e assenza di errori.
-5. Controllare in Supabase `updated_at`, `last_price`, `rsi` e `status_message`. `local_score=0` è normale senza setup.
-6. Non utilizzare segnali per operazioni reali prima di backtest e verifica indipendente.
+Soglie configurabili con `V2_SCORE_A` (default `0.85`) e `V2_SCORE_B` (default `0.65`), `V2_GEMINI_DAILY_LIMIT` (default `10`). Sono score euristici, NON probabilita di successo. Il limite Gemini e in memoria e riparte da zero al riavvio di Render: non e una quota rigida tra riavvii. Nessuna richiesta Gemini se non c'e setup B. Non esiste deduplica persistente: riavvii possono duplicare un avviso.
+
+## Compatibilita e limiti
+- Il bot invia **solo notifiche**: nessun ordine automatico su XTB demo o reale.
+- M15 ricavato da M5; 1 richiesta Twelve Data ogni 5 minuti, 300 candele richieste. Verificare i limiti del proprio piano Twelve Data.
+- UptimeRobot HEAD supportato, ma HTTP 200 non certifica che il feed sia aggiornato e Render Free non garantisce uptime.
+- Supabase usa le tabelle esistenti: `bot_status` id=1, `bounce_signals`. `tp_price` contiene TP2; TP1 solo nel messaggio Telegram. Per compatibilita con lo schema V1, `status=APPROVED` significa *segnale tecnico selezionato per invio*, non necessariamente validato da AI; leggere sempre `ai_reason` per lo stato AI. `ai_score` contiene lo score tecnico, non la confidenza AI.
+- Se il salvataggio del segnale fallisce, il bot tenta comunque l'invio Telegram e registra l'errore nei Logs.
+- Trailing stop **non monitorato automaticamente**; TP1/TP2 sono livelli indicativi. Non c'e conferma di esecuzione o monitoraggio delle posizioni XTB.
+- Rischio 15 EUR NON verificato: dipende da lotto minimo, spread, contratto, cambio e slippage. Solo test demo, nessun rendimento o 80% garantito.
+- Evitare due bot attivi sullo stesso Supabase / Telegram.
+
+## Test Telegram
+Per inviare un test all'avvio, impostare temporaneamente `V2_TEST_TELEGRAM_ON_START=true`, effettuare deploy e poi riportarlo a `false` per evitare messaggi ad ogni riavvio. Non pubblicare token nel repository.
