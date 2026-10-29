@@ -21,7 +21,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b'Bounce bot process online (not market-feed health)')
-    def log_message(self, *_): pass
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, *_):
+        pass
 
 def serve():
     HTTPServer(('0.0.0.0', int(os.getenv('PORT', '10000'))), Handler).serve_forever()
