@@ -65,22 +65,25 @@ def run_web_server():
 
 def fetch_market_data() -> pd.DataFrame:
     """
-    Scarica i dati spot di XAU/USD da OANDA API pubblica (Practice endpoint).
+    Scarica i dati spot di XAU/USD da OANDA con debug avanzato della risposta.
     """
     try:
         url = "https://api-fxpractice.oanda.com/v3/instruments/XAU_USD/candles?count=100&granularity=M5"
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=5)
         
+        print(f"[DEBUG OANDA] Status Code: {response.status_code}")
+        
         if response.status_code != 200:
-            print(f"[MERCATO] Errore HTTP OANDA: {response.status_code} - {response.text}")
+            print(f"[MERCATO] Errore HTTP OANDA: {response.text}")
             return pd.DataFrame()
             
         data = response.json()
         candles = data.get('candles', [])
         
+        print(f"[DEBUG OANDA] Candele trovate: {len(candles)}")
+        
         if not candles:
-            print("[DATI] Nessuna candela ricevuta da OANDA.")
             return pd.DataFrame()
             
         parsed_data = []
@@ -99,8 +102,9 @@ def fetch_market_data() -> pd.DataFrame:
         return df
         
     except Exception as e:
-        print(f"[ERRORE FETCH OANDA]: {e}")
+        print(f"[ERRORE FETCH OANDA EXCEPTION]: {e}")
         return pd.DataFrame()
+
 
 def run_bounce_bot():
     print(f"🚀 Bounce Bot (XAU/USD Mean-Reversion) Avviato con successo...")
