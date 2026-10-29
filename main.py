@@ -71,43 +71,35 @@ def run_web_server():
     print(f"[WEB SERVER] In ascolto sulla porta {port}...")
     server.serve_forever()
 
+import yfinance as yf
+
 def fetch_xtb_market_data() -> pd.DataFrame:
-    """Scarica candele M5 per XAU/USD con debug e fallback pulito."""
+    """Scarica candele M5 recenti per XAU/USD tramite yfinance in modo stabile."""
     try:
-        url = "https://api-fxpractice.oanda.com/v3/instruments/XAU_USD/candles?count=50&granularity=M5"
-        response = requests.get(url, timeout=10)
+        # Scarica i dati storici recenti per l'Oro (GC=F o XAU=X)
+        gold = yf.Ticker("GC=F")
+        df = gold.history(period="1d", interval="5m")
         
-        print(f"[DEBUG DATI] Status HTTP: {response.status_code}")
-        
-        if response.status_code != 200:
+        if df.empty:
+            print("[DATI] Nessun dato ricevuto da Yahoo Finance.")
             return pd.DataFrame()
             
-        data = response.json()
-        candles = data.get('candles', [])
-        print(f"[DEBUG DATI] Candele ricevute: {len(candles)}")
+        # Rinomina le colonne per renderle compatibili con gli indicatori esistenti
+        df = df.rename(columns={
+            'Open': 'open',
+            'High': 'high',
+            'Low': 'low',
+            'Close': 'close',
+            'Volume': 'volume'
+        })
         
-        if not candles:
-            return pd.DataFrame()
-            
-        parsed_data = []
-        for c in candles:
-            mid = c.get('mid', {})
-            if mid:
-                parsed_data.append({
-                    'open': float(mid.get('o', 0)),
-                    'high': float(mid.get('h', 0)),
-                    'low': float(mid.get('l', 0)),
-                    'close': float(mid.get('c', 0)),
-                    'volume': int(c.get('volume', 0))
-                })
-                
-        df = pd.DataFrame(parsed_data).dropna()
+        # Pulisce eventuali valori nulli
+        df = df[['open', 'high', 'low', 'close', 'volume']].dropna()
         return df
+        
     except Exception as e:
-        print(f"[DEBUG ERRORE EXCEPTION]: {e}")
+        print(f"[MARKET EXCEPTION]: {e}")
         return pd.DataFrame()
-
-
 
 def run_bounce_bot():
     print(f"🚀 Bounce Bot XTB (XAU/USD) Avviato con successo...")
