@@ -20,9 +20,11 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXV
 db_client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def save_bot_status(status_data):
+    from datetime import datetime, timezone
+
+def save_bot_status(status_data):
     """Salva o aggiorna lo stato corrente del bot su Supabase per la dashboard live."""
     try:
-        # Usiamo un upsert basato su un id fisso (es. id = 1) per mantenere sempre l'ultimo stato aggiornato
         payload = {
             "id": 1,
             "symbol": SYMBOL,
@@ -30,11 +32,10 @@ def save_bot_status(status_data):
             "rsi": status_data.get("rsi", 0),
             "local_score": status_data.get("local_score", 0),
             "status_message": status_data.get("message", "In esecuzione..."),
-            "updated_at": datetime.utcnow().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }
         db_client.table("bot_status").upsert(payload).execute()
     except Exception as e:
-        # Silenziamo eventuali errori di rete minori per non interrompere il loop principale
         pass
 
 # --- MINI SERVER WEB PER MANTENERE IL BOT GRATUITO SU RENDER ---
