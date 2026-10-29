@@ -5,4 +5,5 @@ ta
 supabase
 google-genai
 python-dotenv
-websocket-client
+websocket-clien
+yfinance
