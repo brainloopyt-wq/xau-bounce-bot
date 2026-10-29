@@ -26,20 +26,22 @@ from supabase import create_client
 db_client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def save_bot_status(status_data):
-    """Salva lo stato corrente su Supabase per la dashboard web."""
+    """Salva o inserisce lo stato corrente su Supabase con gestione degli errori."""
     try:
         payload = {
             "id": 1,
             "symbol": SYMBOL,
-            "last_price": status_data.get("price", 0),
-            "rsi": status_data.get("rsi", 0),
-            "local_score": status_data.get("local_score", 0),
-            "status_message": status_data.get("message", "In esecuzione..."),
+            "last_price": float(status_data.get("price", 0)),
+            "rsi": float(status_data.get("rsi", 0)),
+            "local_score": float(status_data.get("local_score", 0)),
+            "status_message": str(status_data.get("message", "In esecuzione...")),
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
-        db_client.table("bot_status").upsert(payload).execute()
+        # Esegue l'upsert forzato sulla riga con id=1
+        response = db_client.table("bot_status").upsert(payload).execute()
+        print(f"[SUPABASE SUCCESS] Stato aggiornato: {payload['last_price']} | RSI: {payload['rsi']}")
     except Exception as e:
-        print(f"[SUPABASE ERROR] {e}")
+        print(f"[SUPABASE ERROR CRITICAL] Errore upsert bot_status: {e}")
 
 # --- MINI SERVER WEB PER RENDER ---
 class SimpleHandler(BaseHTTPRequestHandler):
