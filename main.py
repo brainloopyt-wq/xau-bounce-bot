@@ -71,30 +71,32 @@ def run_web_server():
     print(f"[WEB SERVER] In ascolto sulla porta {port}...")
     server.serve_forever()
 
-import yfinance as yf
-
 def fetch_xtb_market_data() -> pd.DataFrame:
-    """Scarica candele M5 recenti per XAU/USD tramite yfinance in modo stabile."""
+    """Scarica candele M5 per XAU/USD tramite Binance PAXG (Oro fisico 1:1) in modo stabile su Render."""
     try:
-        # Scarica i dati storici recenti per l'Oro (GC=F o XAU=X)
-        gold = yf.Ticker("GC=F")
-        df = gold.history(period="1d", interval="5m")
+        url = "https://api.binance.com/api/v3/klines?symbol=PAXGUSDT&interval=5m&limit=50"
+        response = requests.get(url, timeout=10)
         
-        if df.empty:
-            print("[DATI] Nessun dato ricevuto da Yahoo Finance.")
+        if response.status_code != 200:
+            print(f"[MARKET] Errore HTTP Binance: {response.status_code}")
             return pd.DataFrame()
             
-        # Rinomina le colonne per renderle compatibili con gli indicatori esistenti
-        df = df.rename(columns={
-            'Open': 'open',
-            'High': 'high',
-            'Low': 'low',
-            'Close': 'close',
-            'Volume': 'volume'
-        })
-        
-        # Pulisce eventuali valori nulli
-        df = df[['open', 'high', 'low', 'close', 'volume']].dropna()
+        data = response.json()
+        if not isinstance(data, list) or len(data) == 0:
+            print("[MARKET] Nessun dato ricevuto da Binance.")
+            return pd.DataFrame()
+            
+        parsed_data = []
+        for c in data:
+            parsed_data.append({
+                'open': float(c[1]),
+                'high': float(c[2]),
+                'low': float(c[3]),
+                'close': float(c[4]),
+                'volume': float(c[5])
+            })
+            
+        df = pd.DataFrame(parsed_data).dropna()
         return df
         
     except Exception as e:
