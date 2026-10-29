@@ -70,18 +70,19 @@ def run_web_server():
     server.serve_forever()
 
 def fetch_xtb_market_data() -> pd.DataFrame:
-    """Scarica candele M5 affidabili per XAU/USD con fallback sicuro."""
+    """Scarica candele M5 per XAU/USD con debug e fallback pulito."""
     try:
-        # Usiamo un feed pubblico di backup stabile per l'oro (M5)
         url = "https://api-fxpractice.oanda.com/v3/instruments/XAU_USD/candles?count=50&granularity=M5"
         response = requests.get(url, timeout=10)
         
+        print(f"[DEBUG DATI] Status HTTP: {response.status_code}")
+        
         if response.status_code != 200:
-            print(f"[MARKET] Errore HTTP: {response.status_code}")
             return pd.DataFrame()
             
         data = response.json()
         candles = data.get('candles', [])
+        print(f"[DEBUG DATI] Candele ricevute: {len(candles)}")
         
         if not candles:
             return pd.DataFrame()
@@ -101,8 +102,9 @@ def fetch_xtb_market_data() -> pd.DataFrame:
         df = pd.DataFrame(parsed_data).dropna()
         return df
     except Exception as e:
-        print(f"[MARKET ERROR]: {e}")
+        print(f"[DEBUG ERRORE EXCEPTION]: {e}")
         return pd.DataFrame()
+
 
 
 def run_bounce_bot():
