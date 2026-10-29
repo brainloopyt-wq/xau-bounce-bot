@@ -5,3 +5,4 @@ ta
 supabase
 google-genai
 python-dotenv
+websocket-client
