@@ -67,8 +67,7 @@ def run_web_server():
 
 def fetch_market_data() -> pd.DataFrame:
     """
-    Scarica i dati spot di XAU/USD da OANDA API pubblica (intervallo 5m),
-    garantendo stabilità e coerenza con i grafici di TradingView.
+    Scarica i dati spot di XAU/USD da OANDA API pubblica (intervallo 5m).
     """
     try:
         url = "https://api-fxtrade.oanda.com/v3/instruments/XAU_USD/candles?count=100&granularity=M5"
@@ -76,20 +75,21 @@ def fetch_market_data() -> pd.DataFrame:
         response = requests.get(url, headers=headers, timeout=5)
         
         if response.status_code != 200:
-            print(f"[MERCATO] Errore HTTP OANDA: {response.status_code}")
+            print(f"[MERCATO] Errore HTTP OANDA: {response.status_code} - {response.text}")
             return pd.DataFrame()
             
         data = response.json()
         candles = data.get('candles', [])
         
         if not candles:
-            print("[DATI] Nessuna candela ricevuta da OANDA.")
+            print("[DATI] Nessuna candela ricevuta da OANDA. JSON ricevuto:", data)
             return pd.DataFrame()
             
         parsed_data = []
         for c in candles:
-            if c.get('complete', True):
-                mid = c.get('mid', {})
+            # Rimuoviamo il filtro rigido 'complete' per assicurarci di prendere comunque l'ultima candela attiva
+            mid = c.get('mid', {})
+            if mid:
                 parsed_data.append({
                     'open': float(mid.get('o', 0)),
                     'high': float(mid.get('h', 0)),
@@ -104,6 +104,8 @@ def fetch_market_data() -> pd.DataFrame:
     except Exception as e:
         print(f"[ERRORE FETCH OANDA]: {e}")
         return pd.DataFrame()
+
+
 
 
 def run_bounce_bot():
